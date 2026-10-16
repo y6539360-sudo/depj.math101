@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hextris Hexagonal Puzzle</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      background: #090d16;
+      color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+      padding: 12px;
+    }
+    .hud {
+      display: flex;
+      justify-content: space-between;
+      width: 100%;
+      max-width: 440px;
+      margin-bottom: 12px;
+      padding: 10px 16px;
+      background: #131b2e;
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+    }
+    .stat { font-size: 12px; font-weight: 700; color: #94a3b8; }
+    .stat span { color: #f59e0b; font-size: 18px; margin-left: 6px; font-variant-numeric: tabular-nums; }
+    .canvas-container {
+      position: relative;
+      background: #030712;
+      border: 2px solid #1e293b;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+    }
+    canvas { display: block; }
+    .overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(3, 7, 18, 0.88);
+      backdrop-filter: blur(4px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+    .overlay.active { opacity: 1; pointer-events: auto; }
+    .overlay h2 { font-size: 28px; font-weight: 800; color: #f43f5e; }
+    button {
+      background: #1e293b;
+      color: #f8fafc;
+      border: 1px solid #334155;
+      padding: 8px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: #334155; border-color: #f59e0b; }
+    .rot-controls {
+      display: flex;
+      gap: 16px;
+      margin-top: 12px;
+    }
+    .rot-btn {
+      width: 60px;
+      height: 48px;
+      font-size: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="hud">
+    <div class="stat">Score: <span id="scoreText">0</span></div>
+    <div class="stat">Multiplier: <span id="comboText">1x</span></div>
+  </div>
+
+  <div class="canvas-container">
+    <canvas id="hexCanvas" width="420" height="420"></canvas>
+    <div id="overlay" class="overlay">
+      <h2>GAME OVER</h2>
+      <p id="finalScore" style="color:#94a3b8; font-size:14px;">Score: 0</p>
+      <button onclick="startGame()">Play Again</button>
+    </div>
+  </div>
+
+  <div class="rot-controls">
+    <button class="rot-btn" onclick="rotate(-1)">⟲ [A]</button>
+    <button class="rot-btn" onclick="rotate(1)">⟳ [D]</button>
+  </div>
+  <p style="margin-top: 10px; font-size: 12px; color: #64748b;">
+    Rotate hexagon to match 3 colors on any side · Left/Right Arrow or A/D
+  </p>
+
+  <script>
+    const canvas = document.getElementById('hexCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreText = document.getElementById('scoreText');
+    const comboText = document.getElementById('comboText');
+    const overlay = document.getElementById('overlay');
+    const finalScore = document.getElementById('finalScore');
+
+    const COLORS = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b'];
+    const SIDES = 6;
+    const HEX_RADIUS = 50;
+    const MAX_STACK = 8;
+    const BLOCK_THICKNESS = 14;
+
+    let score = 0;
+    let combo = 1;
+    let hexAngle = 0;
+    let targetAngle = 0;
+    let isGameOver = false;
+
+    // Stacks on each of the 6 sides: array of colors
+    let stacks = [[], [], [], [], [], []];
+    let incomingBlocks = [];
+    let frame = 0;
+    let spawnRate = 90;
+
+    function startGame() {
+      score = 0;
+      combo = 1;
+      hexAngle = 0;
+      targetAngle = 0;
+      isGameOver = false;
+      stacks = [[], [], [], [], [], []];
+      incomingBlocks = [];
+      frame = 0;
+      spawnRate = 90;
+      scoreText.textContent = '0';
+      comboText.textContent = '1x';
+      overlay.classList.remove('active');
+    }
+
+    function rotate(dir) {
+      if (isGameOver) return;
+      targetAngle += (dir * Math.PI / 3);
+    }
+
+    window.addEventListener('keydown', e => {
+      if (e.code === 'ArrowLeft' || e.code === 'KeyA') rotate(-1);
+      if (e.code === 'ArrowRight' || e.code === 'KeyD') rotate(1);
+    });
+
+    function spawnBlock() {
+      const side = Math.floor(Math.random() * SIDES);
+      const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+      incomingBlocks.push({
+        side: side,
+        dist: 220,
+        speed: 1.8 + Math.min(2.5, score / 400),
+        color: color
+      });
+    }
+
+    function checkMatches(side) {
+      const stack = stacks[side];
+      if (stack.length < 3) return;
+
+      // Count consecutive from top
+      let matchColor = stack[stack.length - 1];
+      let count = 0;
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i] === matchColor) count++;
+        else break;
+      }
+
+      if (count >= 3) {
+        for (let i = 0; i < count; i++) stack.pop();
+        score += count * 20 * combo;
+        combo++;
+        scoreText.textContent = score;
+        comboText.textContent = combo + 'x';
+      }
+    }
+
+    function update() {
+      if (isGameOver) return;
+      frame++;
+
+      // Smooth hex rotation
+      hexAngle += (targetAngle - hexAngle) * 0.25;
+
+      if (frame % spawnRate === 0) {
+        spawnBlock();
+        if (frame % 300 === 0 && spawnRate > 40) spawnRate -= 5;
+      }
+
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+
+      for (let i = incomingBlocks.length - 1; i >= 0; i--) {
+        const b = incomingBlocks[i];
+        b.dist -= b.speed;
+
+        // Current side relative to rotation
+        // Normalize rotation to nearest side index (0 to 5)
+        const rotSteps = Math.round(hexAngle / (Math.PI / 3));
+        let activeSide = (b.side - rotSteps) % SIDES;
+        if (activeSide < 0) activeSide += SIDES;
+
+        const currentStackHeight = stacks[activeSide].length;
+        const targetDist = HEX_RADIUS + (currentStackHeight * BLOCK_THICKNESS);
+
+        if (b.dist <= targetDist) {
+          stacks[activeSide].push(b.color);
+          incomingBlocks.splice(i, 1);
+          checkMatches(activeSide);
+
+          if (stacks[activeSide].length > MAX_STACK) {
+            isGameOver = true;
+            finalScore.textContent = 'Score: ' + score;
+            overlay.classList.add('active');
+          }
+        }
+      }
+    }
+
+    function drawHexagon(cx, cy, r, angle, strokeStyle, fillStyle) {
+      ctx.beginPath();
+      for (let i = 0; i < SIDES; i++) {
+        const a = angle + i * (Math.PI / 3);
+        const x = cx + r * Math.cos(a);
+        const y = cy + r * Math.sin(a);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      if (fillStyle) { ctx.fillStyle = fillStyle; ctx.fill(); }
+      if (strokeStyle) { ctx.strokeStyle = strokeStyle; ctx.lineWidth = 3; ctx.stroke(); }
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+
+      // Draw Center Grey Hexagon
+      drawHexagon(cx, cy, HEX_RADIUS - 4, hexAngle, '#334155', '#1e293b');
+
+      // Draw stacked blocks on the rotating hexagon
+      for (let s = 0; s < SIDES; s++) {
+        const stack = stacks[s];
+        stack.forEach((color, idx) => {
+          const r1 = HEX_RADIUS + idx * BLOCK_THICKNESS;
+          const r2 = r1 + BLOCK_THICKNESS - 2;
+          const a1 = hexAngle + s * (Math.PI / 3) - Math.PI / 6;
+          const a2 = a1 + (Math.PI / 3);
+
+          ctx.beginPath();
+          ctx.arc(cx, cy, r1, a1, a2);
+          ctx.arc(cx, cy, r2, a2, a1, true);
+          ctx.closePath();
+          ctx.fillStyle = color;
+          ctx.fill();
+        });
+      }
+
+      // Draw incoming blocks
+      incomingBlocks.forEach(b => {
+        const r1 = b.dist;
+        const r2 = r1 + BLOCK_THICKNESS - 2;
+        const a1 = b.side * (Math.PI / 3) - Math.PI / 6;
+        const a2 = a1 + (Math.PI / 3);
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, r1, a1, a2);
+        ctx.arc(cx, cy, r2, a2, a1, true);
+        ctx.closePath();
+        ctx.fillStyle = b.color;
+        ctx.fill();
+      });
+    }
+
+    function loop() {
+      update();
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    startGame();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
